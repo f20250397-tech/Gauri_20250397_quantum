@@ -1,0 +1,190 @@
+import time
+import sys
+import numpy as np
+
+class QuantumSimulator:
+    def __init__(self, num_qubits: int):
+        if num_qubits < 1:
+            raise ValueError("Number of qubits must be at least 1.")
+        
+        self.num_qubits = num_qubits
+        self.state_dim = 1 << num_qubits 
+      
+        self.state_vector = np.zeros(self.state_dim, dtype=np.complex128)
+        self.state_vector[0] = 1.0 + 0.0j
+        
+        # Core Gate Definitions
+        self.I = np.array([[1, 0], [0, 1]], dtype=np.complex128)
+        self.X = np.array([[0, 1], [1, 0]], dtype=np.complex128)
+        self.H = (1 / np.sqrt(2)) * np.array([[1, 1], [1, -1]], dtype=np.complex128)
+        self.Z = np.array([[1, 0], [0, -1]], dtype=np.complex128)
+
+        # KPI Tracking Metrics
+        self.gate_execution_times = []
+        self.total_execution_time = 0.0
+
+    def _get_single_qubit_operator(self, gate: np.ndarray, target_qubit: int) -> np.ndarray:
+        operator = gate if target_qubit == 0 else self.I
+        
+        for q in range(1, self.num_qubits):
+            if q == target_qubit:
+                operator = np.kron(operator, gate)
+            else:
+                operator = np.kron(operator, self.I)
+        return operator
+
+    def apply_single_gate(self, gate_name: str, target_qubit: int):
+        if target_qubit >= self.num_qubits or target_qubit < 0:
+            raise IndexError(f"Target qubit index {target_qubit} out of bounds.")
+
+        start_time = time.perf_counter()
+        
+        # Select gate matrix
+        if gate_name.upper() == 'X':
+            gate_matrix = self.X
+        elif gate_name.upper() == 'H':
+            gate_matrix = self.H
+        elif gate_name.upper() == 'Z':
+            gate_matrix = self.Z
+        else:
+            raise ValueError(f"Unsupported single qubit gate: {gate_name}")
+
+        # Compute full system operator matrix and multiply
+        full_operator = self._get_single_qubit_operator(gate_matrix, target_qubit)
+        self.state_vector = np.dot(full_operator, self.state_vector)
+        
+        duration = time.perf_counter() - start_time
+        self.gate_execution_times.append((f"{gate_name}({target_qubit})", duration))
+
+    def apply_cnot(self, control_qubit: int, target_qubit: int):
+        """
+        Applies a Controlled-NOT (CNOT) gate.
+        Flips the target qubit if the control qubit is |1>.
+        """
+        if control_qubit == target_qubit:
+            raise ValueError("Control and target qubits cannot be the same.")
+        if max(control_qubit, target_qubit) >= self.num_qubits or min(control_qubit, target_qubit) < 0:
+            raise IndexError("Qubit indices out of bounds.")
+
+        start_time = time.perf_counter()
+
+        # Projectors for control qubit
+        p0 = np.array([[1, 0], [0, 0]], dtype=np.complex128) # |0><0|
+        p1 = np.array([[0, 0], [0, 1]], dtype=np.complex128) # |1><1|
+
+        # Component 1: Control is |0> -> Target is identity (I)
+        op_cond_0 = p0 if control_qubit == 0 else self.I
+        # Component 2: Control is |1> -> Target is flipped (X)
+        op_cond_1 = p1 if control_qubit == 0 else self.I
+
+        for q in range(1, self.num_qubits):
+            # Term 0 path
+            if q == control_qubit:
+                op_cond_0 = np.kron(op_cond_0, p0)
+            elif q == target_qubit:
+                op_cond_0 = np.kron(op_cond_0, self.I)
+            else:
+                op_cond_0 = np.kron(op_cond_0, self.I)
+
+            # Term 1 path
+            if q == control_qubit:
+                op_cond_1 = np.kron(op_cond_1, p1)
+            elif q == target_qubit:
+                op_cond_1 = np.kron(op_cond_1, self.X)
+            else:
+                op_cond_1 = np.kron(op_cond_1, self.I)
+
+        # Combined full circuit operator
+        cnot_matrix = op_cond_0 + op_cond_1
+        self.state_vector = np.dot(cnot_matrix, self.state_vector)
+
+        duration = time.perf_counter() - start_time
+        self.gate_execution_times.append((f"CNOT(c:{control_qubit}, t:{target_qubit})", duration))
+
+    def apply_swap(self, qubit_a: int, qubit_b: int):
+        """Applies a SWAP gate between two qubits using 3 CNOT operations."""
+        self.apply_cnot(qubit_a, qubit_b)
+        self.apply_cnot(qubit_b, qubit_a)
+        self.apply_cnot(qubit_a, qubit_b)
+
+    def get_probabilities(self) -> np.ndarray:
+        """Calculates measurement probabilities ($|amplitude|^2$) for all states."""
+        return np.abs(self.state_vector) ** 2
+
+    def display_state(self):
+        """Prints out the current state vector and matching probabilities beautifully."""
+        print("\n--- Current Quantum State ---")
+        probabilities = self.get_probabilities()
+        for i in range(self.state_dim):
+            binary_state = format(i, f'0{self.num_qubits}b')
+            amplitude = self.state_vector[i]
+            prob = probabilities[i]
+            if prob > 0.0001:  # Display non-zero probabilities clearly
+                print(f"|{binary_state}⟩: Amplitude = {amplitude.real:+.4f} + {amplitude.imag:+.4f}j | Probability = {prob*100:6.2f}%")
+        print("-----------------------------")
+
+    def print_kpis(self, initial_memory_bytes: int):
+        """Computes and documents the mandatory KPI benchmarks."""
+        # Calculate memory footprint of the current state vector object
+        state_vector_memory = self.state_vector.nbytes
+        
+        print("\n================ KPI REPORT ================")
+        print(f"1. Number of Qubits Supported : {self.num_qubits}")
+        print(f"2. State Vector Dimension     : {self.state_dim} elements")
+        print(f"3. State Vector Memory Usage  : {state_vector_memory} Bytes ({state_vector_memory / 1024:.4f} KB)")
+        print(f"4. Total Execution Time       : {self.total_execution_time:.6f} seconds")
+        print(f"5. Probability Correctness    : Sum = {np.sum(self.get_probabilities()):.4f} (Expected: 1.0)")
+        print("\n6. Gate-by-Gate Breakdowns:")
+        for gate, duration in self.gate_execution_times:
+            print(f"   - Gate [{gate}] executed in: {duration:.6f} seconds")
+        print("============================================")
+
+
+# ==========================================
+# RUNNING CIRCUITS / WORKFLOW EXAMPLES
+# ==========================================
+
+if __name__ == "__main__":
+    # Approximate starting memory check
+    approx_base_mem = sys.getsizeof(np.zeros(1))
+
+    print("==================================================")
+    print("DEMO 1: Generating a 2-Qubit Bell State (|00> + |11>) / sqrt(2)")
+    print("==================================================")
+    
+    # Track overall circuit processing window
+    start_workflow = time.perf_counter()
+    
+    sim_bell = QuantumSimulator(num_qubits=2)
+    print("Initial State:")
+    sim_bell.display_state()
+    
+    # 1. Apply Hadamard to Qubit 0 -> Superposition
+    print("\nApplying H gate to Qubit 0...")
+    sim_bell.apply_single_gate('H', target_qubit=0)
+    sim_bell.display_state()
+    
+    # 2. Entangle Qubit 0 and Qubit 1 via CNOT
+    print("\nApplying CNOT (Control: 0, Target: 1)...")
+    sim_bell.apply_cnot(control_qubit=0, target_qubit=1)
+    sim_bell.display_state()
+    
+    sim_bell.total_execution_time = time.perf_counter() - start_workflow
+    sim_bell.print_kpis(approx_base_mem)
+
+
+    print("\n\n==================================================")
+    print("DEMO 2: Quantum Coin Toss / Random Number Generator (3 Qubits)")
+    print("==================================================")
+    
+    start_workflow = time.perf_counter()
+    sim_rng = QuantumSimulator(num_qubits=3)
+    
+    # Apply Hadamard to all 3 qubits to construct uniform superposition across 8 possible states
+    for q in range(3):
+        sim_rng.apply_single_gate('H', target_qubit=q)
+        
+    sim_rng.display_state()
+    
+    sim_rng.total_execution_time = time.perf_counter() - start_workflow
+    sim_rng.print_kpis(approx_base_mem)
