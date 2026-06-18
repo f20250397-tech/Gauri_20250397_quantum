@@ -38,8 +38,7 @@ class QuantumSimulator:
             raise IndexError(f"Target qubit index {target_qubit} out of bounds.")
 
         start_time = time.perf_counter()
-        
-        # Select gate matrix
+    
         if gate_name.upper() == 'X':
             gate_matrix = self.X
         elif gate_name.upper() == 'H':
@@ -49,7 +48,6 @@ class QuantumSimulator:
         else:
             raise ValueError(f"Unsupported single qubit gate: {gate_name}")
 
-        # Compute full system operator matrix and multiply
         full_operator = self._get_single_qubit_operator(gate_matrix, target_qubit)
         self.state_vector = np.dot(full_operator, self.state_vector)
         
@@ -57,10 +55,6 @@ class QuantumSimulator:
         self.gate_execution_times.append((f"{gate_name}({target_qubit})", duration))
 
     def apply_cnot(self, control_qubit: int, target_qubit: int):
-        """
-        Applies a Controlled-NOT (CNOT) gate.
-        Flips the target qubit if the control qubit is |1>.
-        """
         if control_qubit == target_qubit:
             raise ValueError("Control and target qubits cannot be the same.")
         if max(control_qubit, target_qubit) >= self.num_qubits or min(control_qubit, target_qubit) < 0:
@@ -68,17 +62,13 @@ class QuantumSimulator:
 
         start_time = time.perf_counter()
 
-        # Projectors for control qubit
         p0 = np.array([[1, 0], [0, 0]], dtype=np.complex128) # |0><0|
         p1 = np.array([[0, 0], [0, 1]], dtype=np.complex128) # |1><1|
 
-        # Component 1: Control is |0> -> Target is identity (I)
         op_cond_0 = p0 if control_qubit == 0 else self.I
-        # Component 2: Control is |1> -> Target is flipped (X)
         op_cond_1 = p1 if control_qubit == 0 else self.I
 
         for q in range(1, self.num_qubits):
-            # Term 0 path
             if q == control_qubit:
                 op_cond_0 = np.kron(op_cond_0, p0)
             elif q == target_qubit:
@@ -86,7 +76,6 @@ class QuantumSimulator:
             else:
                 op_cond_0 = np.kron(op_cond_0, self.I)
 
-            # Term 1 path
             if q == control_qubit:
                 op_cond_1 = np.kron(op_cond_1, p1)
             elif q == target_qubit:
@@ -94,7 +83,6 @@ class QuantumSimulator:
             else:
                 op_cond_1 = np.kron(op_cond_1, self.I)
 
-        # Combined full circuit operator
         cnot_matrix = op_cond_0 + op_cond_1
         self.state_vector = np.dot(cnot_matrix, self.state_vector)
 
@@ -102,17 +90,14 @@ class QuantumSimulator:
         self.gate_execution_times.append((f"CNOT(c:{control_qubit}, t:{target_qubit})", duration))
 
     def apply_swap(self, qubit_a: int, qubit_b: int):
-        """Applies a SWAP gate between two qubits using 3 CNOT operations."""
         self.apply_cnot(qubit_a, qubit_b)
         self.apply_cnot(qubit_b, qubit_a)
         self.apply_cnot(qubit_a, qubit_b)
 
     def get_probabilities(self) -> np.ndarray:
-        """Calculates measurement probabilities ($|amplitude|^2$) for all states."""
         return np.abs(self.state_vector) ** 2
 
     def display_state(self):
-        """Prints out the current state vector and matching probabilities beautifully."""
         print("\n--- Current Quantum State ---")
         probabilities = self.get_probabilities()
         for i in range(self.state_dim):
@@ -124,8 +109,6 @@ class QuantumSimulator:
         print("-----------------------------")
 
     def print_kpis(self, initial_memory_bytes: int):
-        """Computes and documents the mandatory KPI benchmarks."""
-        # Calculate memory footprint of the current state vector object
         state_vector_memory = self.state_vector.nbytes
         
         print("\n================ KPI REPORT ================")
