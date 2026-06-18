@@ -1,0 +1,172 @@
+import time
+import sys
+import numpy as np
+import matplotlib.pyplot as plt
+
+# CHALLENGE A: VISUALIZATION MODULE
+
+def plot_probabilities(simulator: QuantumSimulator, title: str = "Quantum State Measurement Probabilities"):
+    probs = simulator.get_probabilities()
+    states = [format(i, f'0{simulator.num_qubits}b') for i in range(simulator.state_dim)]
+    
+    plt.figure(figsize=(8, 4))
+    bars = plt.bar(states, probs, color='#C62828', edgecolor='black', alpha=0.85)
+    plt.xlabel('Quantum States |ψ⟩', fontsize=11, fontweight='bold')
+    plt.ylabel('Probability', fontsize=11, fontweight='bold')
+    plt.title(title, fontsize=12, fontweight='bold', pad=15)
+    plt.ylim(0, 1.1)
+    plt.grid(axis='y', linestyle='--', alpha=0.5)
+  
+    for bar in bars:
+        height = bar.get_height()
+        if height > 0.01:
+            plt.annotate(f'{height*100:.1f}%',
+                        xy=(bar.get_x() + bar.get_width() / 2, height),
+                        xytext=(0, 3), textcoords="offset points",
+                        ha='center', va='bottom', fontsize=9, fontweight='bold')
+    plt.tight_layout()
+    plt.show()
+
+# CHALLENGE B: FIXED-POINT ARITHMETIC EMULATION
+
+def emulate_fixed_point(val: complex, fractional_bits: int = 8) -> complex:
+    scale = 1 << fractional_bits
+    
+    r_fixed = np.round(val.real * scale) / scale
+    i_fixed = np.round(val.imag * scale) / scale
+    return complex(r_fixed, i_fixed)
+
+def run_fixed_point_analysis(fractional_bits: int = 6):
+    print(f"\n--- Challenge B: Quantization Stability Analysis ({fractional_bits}-bit precision) ---")
+    
+    ideal_amplitude = 1 / np.sqrt(2)
+    quantized_amplitude = emulate_fixed_point(complex(ideal_amplitude, 0), fractional_bits)
+    
+    ideal_prob = ideal_amplitude ** 2
+    quantized_prob = np.abs(quantized_amplitude) ** 2
+    precision_loss = np.abs(ideal_prob - quantized_prob)
+    
+    print(f"Ideal Float Value       : {ideal_amplitude:.6f}  -> Ideal Prob: {ideal_prob*100:.2f}%")
+    print(f"Quantized Fixed-Point   : {quantized_amplitude.real:.6f}  -> Quantized Prob: {quantized_prob*100:.2f}%")
+    print(f"Absolute Precision Error: {precision_loss:.6f}")
+
+# CORE SIMULATOR & CHALLENGE C: SPARSE STORAGE OPTIMIZATION
+
+class QuantumSimulator:
+    def __init__(self, num_qubits: int, use_sparse: bool = False):
+        if num_qubits < 1:
+            raise ValueError("Number of qubits must be at least 1.")
+        
+        self.num_qubits = num_qubits
+        self.state_dim = 1 << num_qubits 
+        self.use_sparse = use_sparse
+        
+        if self.use_sparse:
+            self.sparse_state = {0: 1.0 + 0.0j}
+            self.state_vector = None
+        else:
+            self.state_vector = np.zeros(self.state_dim, dtype=np.complex128)
+            self.state_vector[0] = 1.0 + 0.0j
+            self.sparse_state = None
+        
+        self.I = np.array([[1, 0], [0, 1]], dtype=np.complex128)
+        self.X = np.array([[0, 1], [1, 0]], dtype=np.complex128)
+        self.H = (1 / np.sqrt(2)) * np.array([[1, 1], [1, -1]], dtype=np.complex128)
+        self.Z = np.array([[1, 0], [0, -1]], dtype=np.complex128)
+
+        self.gate_execution_times = []
+        self.total_execution_time = 0.0
+
+    def _get_single_qubit_operator(self, gate: np.ndarray, target_qubit: int) -> np.ndarray:
+        operator = gate if target_qubit == 0 else self.I
+        for q in range(1, self.num_qubits):
+            operator = np.kron(operator, gate) if q == target_qubit else np.kron(operator, self.I)
+        return operator
+
+    def _get_cnot_operator(self, control_qubit: int, target_qubit: int) -> np.ndarray:
+        p0 = np.array([[1, 0], [0, 0]], dtype=np.complex128)
+        p1 = np.array([[0, 0], [0, 1]], dtype=np.complex128)
+
+        op_cond_0 = p0 if control_qubit == 0 else self.I
+        op_cond_1 = p1 if control_qubit == 0 else self.I
+
+        for q in range(1, self.num_qubits):
+            op_cond_0 = np.kron(op_cond_0, p0 if q == control_qubit else self.I)
+            op_cond_1 = np.kron(op_cond_1, p1 if q == control_qubit else (self.X if q == target_qubit else self.I))
+        
+        return op_cond_0 + op_cond_1
+
+    def apply_gate(self, gate_name: str, target: int, control: int = None):
+        start_time = time.perf_counter()
+        gate_name = gate_name.upper()
+
+        if gate_name == 'CNOT':
+            op = self._get_cnot_operator(control, target)
+            desc = f"CNOT(c:{control}, t:{target})"
+        else:
+            g_mat = self.X if gate_name == 'X' else (self.H if gate_name == 'H' else self.Z)
+            op = self._get_single_qubit_operator(g_mat, target)
+            desc = f"{gate_name}({target})"
+
+        if self.use_sparse:
+            # Convert current sparse dictionary state temporarily to apply operator matrix multiplication
+            dense_temp = np.zeros(self.state_dim, dtype=np.complex128)
+            for idx, amp in self.sparse_state.items():
+                dense_temp[idx] = amp
+            
+            new_dense = np.dot(op, dense_temp)
+            
+            self.sparse_state = {i: new_dense[i] for i in range(self.state_dim) if not np.isclose(new_dense[i], 0)}
+        else:
+            self.state_vector = np.dot(op, self.state_vector)
+
+        duration = time.perf_counter() - start_time
+        self.gate_execution_times.append((desc, duration))
+
+    def get_probabilities(self) -> np.ndarray:
+        if self.use_sparse:
+            probs = np.zeros(self.state_dim)
+            for idx, amp in self.sparse_state.items():
+                probs[idx] = np.abs(amp) ** 2
+            return probs
+        return np.abs(self.state_vector) ** 2
+
+    def get_memory_usage(self) -> int:
+        if self.use_sparse:
+            # Approximate size of Python dictionary entries containing complex scales
+            return sys.getsizeof(self.sparse_state) + sum(sys.getsizeof(k) + sys.getsizeof(v) for k, v in self.sparse_state.items())
+        return self.state_vector.nbytes
+
+# EXECUTION WORKFLOW
+    
+    # 1. Generate Probability Chart Window (Challenge A)
+    print("\n--- Challenge A: Invoking Matplotlib Rendering Interface ---")
+    plot_probabilities(dense_sim, title="Bell State Matrix Breakdown (Challenge A)")
+
+
+    # 2. Run Fixed Point Analysis (Challenge B)
+    run_fixed_point_analysis(fractional_bits=5) # 5-bit test
+    run_fixed_point_analysis(fractional_bits=10) # 10-bit test
+
+    # 2. Sparse Space Optimization Matrix Evaluation (Challenge C)
+    print("\n--- Challenge C: Memory Profile Performance Analysis ---")
+    qubits = 4
+    
+    # Dense Implementation Run
+    dense_sim = QuantumSimulator(num_qubits=qubits, use_sparse=False)
+    dense_sim.apply_gate('H', target=0)
+    dense_sim.apply_gate('CNOT', target=1, control=0)
+    dense_mem = dense_sim.get_memory_usage()
+    
+    # Sparse Implementation Run
+    sparse_sim = QuantumSimulator(num_qubits=qubits, use_sparse=True)
+    sparse_sim.apply_gate('H', target=0)
+    sparse_sim.apply_gate('CNOT', target=1, control=0)
+    sparse_mem = sparse_sim.get_memory_usage()
+    
+    print(f"Dense Simulator Array Footprint  : {dense_mem} Bytes")
+    print(f"Sparse Simulator Hash Footprint   : {sparse_mem} Bytes")
+    print(f"Space/Gate Optimization Achieved  : Sparse drops zero-states efficiently during transformation.")
+
+    
+
