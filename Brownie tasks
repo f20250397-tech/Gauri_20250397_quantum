@@ -57,6 +57,42 @@ def run_fixed_point_analysis(fractional_bits):
     print(f"Quantized Prob      : {quant_prob:.8f}")
     print(f"Absolute Error      : {error:.8f}")
 
+# Apply H gate
+   def apply_h(self, qubit):
+        if self.use_sparse:
+            dense = np.zeros(
+
+                self.state_dim,
+
+                dtype=np.complex128
+
+            )
+
+            for idx, amp in self.sparse_state.items():
+
+                dense[idx] = amp
+
+            self.state_vector = dense
+
+            self.use_sparse = False
+
+        new_state = np.copy(self.state_vector
+
+        for i in range(self.state_dim):
+            if ((i >> qubit) & 1) == 0:
+
+                j = i | (1 << qubit)
+
+                a = self.state_vector[i]
+
+                b = self.state_vector[j]
+
+                new_state[i] = (a + b) / np.sqrt(2)
+
+                new_state[j] = (a - b) / np.sqrt(2)
+
+        self.state_vector = new_state
+
     # Probabilities
 
     def get_probabilities(self):
